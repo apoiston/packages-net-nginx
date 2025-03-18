@@ -1,0 +1,89 @@
+name: update packages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * *"
+
+jobs:
+  current:
+    runs-on: ubuntu-latest
+    outputs:
+      pkg_version: ${{ steps.current.outputs.pkg_version }}
+      pkg_hash: ${{ steps.current.outputs.pkg_hash }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          repository: apoiston/packages-net-nginx
+          ref: main
+          path: packages-net-nginx
+
+      - name: get current info
+        id: current
+        run: |
+          echo "pkg_version=$(grep "PKG_VERSION:=" packages-net-nginx/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_hash=$(grep "PKG_HASH:=" packages-net-nginx/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+
+  latest:
+    runs-on: ubuntu-latest
+    outputs:
+      latest_version: ${{ steps.latest.outputs.latest_version }}
+      latest_hash: ${{ steps.latest.outputs.latest_hash }}
+
+    steps:
+      - name: get latest info
+        id: latest
+        run: |
+          PKG_SOURCE_URL="https://nginx.org/download/"
+          latest_version=$(curl -s "$PKG_SOURCE_URL" | grep -oP 'nginx-\K[0-9.]+(?=\.tar\.gz)' | sort -V | tail -n 1)
+          latest_tarball="nginx-${latest_version}.tar.gz"
+          latest_url="${PKG_SOURCE_URL}${latest_tarball}"
+          latest_hash=$(curl -sL "$latest_url" | sha256sum | cut -d ' ' -f 1)
+
+          echo "latest_version=${latest_version}" >> $GITHUB_OUTPUT
+          echo "latest_hash=${latest_hash}" >> $GITHUB_OUTPUT
+
+  update:
+    needs:
+      - current
+      - latest
+    if: ${{ needs.current.outputs.pkg_version != needs.latest.outputs.latest_version }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          repository: apoiston/packages-net-nginx
+          ref: main
+          path: packages-net-nginx
+
+      - name: update
+        run: |
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ needs.latest.outputs.latest_version }}/" packages-net-nginx/Makefile
+          sed -i "s/PKG_HASH:=.*/PKG_HASH:=${{ needs.latest.outputs.latest_hash }}/" packages-net-nginx/Makefile
+
+      - name: commit
+        working-directory: packages-net-nginx
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Makefile
+          git commit -m "nginx: update version to ${{ needs.latest.outputs.latest_version }}"
+          git push origin main
+
+  clean:
+    needs: update
+    name: clean
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 1
