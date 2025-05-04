@@ -1,4 +1,4 @@
-name: update packages
+name: update
 
 on:
   workflow_dispatch:
@@ -73,17 +73,3 @@ jobs:
           git add Makefile
           git commit -m "nginx: update version to ${{ needs.latest.outputs.latest_version }}"
           git push origin main
-
-  clean:
-    needs: update
-    name: clean
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: delete workflow runs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          retain_days: 0
-          keep_minimum_runs: 1
