@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * *"
+
+jobs:
+  current:
+    runs-on: ubuntu-latest
+    outputs:
+      pkg_version: ${{ steps.current.outputs.pkg_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          repository: apoiston/packages-net-nginx
+          ref: main
+          path: packages-net-nginx
+
+      - name: Current info
+        id: current
+        run: |
+          pkg_version=$(grep -E "PKG_VERSION:=" packages-net-nginx/Makefile | cut -d '=' -f 2)
+          pkg_hash=$(grep -E "^PKG_HASH:=" packages-net-nginx/Makefile | cut -d '=' -f 2 | xargs)
+          pkg_release=$(grep -E "^PKG_RELEASE:=" packages-net-nginx/Makefile | cut -d '=' -f2 | xargs)
+
+          echo "PKG_VERSION: $pkg_version"
+          echo "PKG_HASH: $pkg_hash"
+          echo "PKG_RELEASE: $pkg_release"
+
+          echo "pkg_version=${pkg_version}" >> $GITHUB_OUTPUT
+
+  latest:
+    runs-on: ubuntu-latest
+    outputs:
+      latest_pkg_version: ${{ steps.latest.outputs.latest_pkg_version }}
+      latest_pkg_hash: ${{ steps.latest.outputs.latest_pkg_hash }}
+
+    steps:
+      - name: Latest info
+        id: latest
+        run: |
+          PKG_SOURCE_URL="https://nginx.org/download/"
+          latest_pkg_version=$(curl -s "$PKG_SOURCE_URL" | grep -oP 'nginx-\K[0-9.]+(?=\.tar\.gz)' | sort -V | tail -n 1)
+          latest_tarball="nginx-${latest_pkg_version}.tar.gz"
+          latest_url="${PKG_SOURCE_URL}${latest_tarball}"
+          latest_pkg_hash=$(curl -sL "$latest_url" | sha256sum | cut -d ' ' -f 1)
+
+          echo "Latest PKG_VERSION: $latest_pkg_version"
+          echo "Latest PKG_HASH: $latest_pkg_hash"
+
+          echo "latest_pkg_version=${latest_pkg_version}" >> $GITHUB_OUTPUT
+          echo "latest_pkg_hash=${latest_pkg_hash}" >> $GITHUB_OUTPUT
+
+  build:
+    needs:
+      - current
+      - latest
+    if: ${{ needs.current.outputs.pkg_version != needs.latest.outputs.latest_pkg_version }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          repository: apoiston/packages-net-nginx
+          ref: main
+          path: packages-net-nginx
+
+      - name: Build
+        run: |
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ needs.latest.outputs.latest_pkg_version }}/" packages-net-nginx/Makefile
+          sed -i "s/PKG_HASH:=.*/PKG_HASH:=${{ needs.latest.outputs.latest_pkg_hash }}/" packages-net-nginx/Makefile
+          sed -i "s/PKG_RELEASE:=.*/PKG_RELEASE:=1/" packages-net-nginx/Makefile
+
+      - name: Commit
+        working-directory: packages-net-nginx
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Makefile
+          git commit -m "nginx: bump to ${{ needs.latest.outputs.latest_pkg_version }}"
+          git push origin main
